@@ -6,58 +6,159 @@ Created on Tue Feb 18 13:54:03 2025
 @author: Jean Negrel
 """
 
+# Numéro de version majeur.
+__majeur__ = '0'
+# Numéro de version mineur.
+__mineur__ = '9'
+# Version du programme.
+__version__ = __majeur__ + '.' + __mineur__
+
+# TODO: Do some cleaning of the script and add error management
+
 import os
 import xml.etree.ElementTree as ET
 import json
-import pandas as pd
+# import pandas as pd
 import zipfile
 import glob
+import subprocess
 from datetime import datetime as dt
+from icoscp_core.icos import meta
 
+# Check if the folder exists and create it if not
+#
+def make_folder(folder):
+    if (folder != '') & (folder != '.'):
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+
+# Run a QuinCE API call to download the dataset corresponding to the given filename
+#
+def QuinCe_API(dataset_name, data_file):
+    import requests
+    from requests.auth import HTTPBasicAuth
+    import json
+    
+    # Load configuration for the QuinCe instance
+    with open(os.path.join(base_path, 'credentials.json')) as f:
+        cred = json.load(f)
+    url = cred['url']
+    username = cred['username']
+    password = cred['password']
+    
+    # Connect to the QuinCe API
+    session = requests.Session()
+    session.auth = HTTPBasicAuth(username, password)
+    response = session.post(url + 'downloadDataset', data={'datasetName': dataset_name}, stream=True)
+    # if the connection has been successful, retrieve the dataset
+    if response.status_code == 200:
+        print('Connection successful!')
+        if len(response.text) > 22: # Check the file is not "empty", limit set arbitrarily to minimum zip file size
+            try:
+                with open(data_file, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                fsize = len(response.content)
+                if fsize >= 1024:
+                    if fsize >= 1024*1024:
+                        size_str = 'MB'
+                        fsize = fsize/1024*1024
+                    else:
+                        size_str = 'kB'
+                        fsize = fsize/1024
+                else:
+                    size_str = 'bytes'
+                print("File downloaded successfully! (%5.2f %s written)" % (fsize, size_str))
+            except requests.exceptions.RequestException as e:
+                print("Error downloading the file:", e)
+        else:
+            print('Looks like the zip file is empty...')
+    else:
+        print(f"Failed! Status code: {response.status_code}")
+        print("Response content:", response.content)
+    
 # Read template xml file and return it
+#
 def import_xml(xml_file):
     tree = ET.parse(xml_file)
     root = tree.getroot()
     return root
 
 # Unzip the archive exported from QuinCe into the temporary folder
+#
 def unzip_data(data_file):
     with zipfile.ZipFile(data_file, 'r') as zipf:
         zipf.extractall(tmp_path)
+    os.remove(data_file)
 
 # Load the metadata contained in the manifest.json file as well as the data in
 # the tsv file.
 # The original data zipfile is unpacked into the temp folder in order to load
 # the .tsv file.
+#
 def import_metadata(tmp_folder, data_file):
     unzip_data(data_file)
     metadata_fname = os.path.join(tmp_folder, 'manifest.json')
     with open(metadata_fname, 'r') as file:
         metadata = json.load(file)
-    data_fname = os.path.join(
-        tmp_folder,
-        'dataset',
-        'SOCAT',
-        zip_fname.replace('.zip','.tsv')
-        )
-    data = pd.read_csv(data_fname, delimiter = '\t')
-    return metadata, data
+    # data = pd.read_csv(data_fname, delimiter = '\t')
+    return metadata
 
+def get_CP_metadata(filename, start_date, end_date):
+    _DATA_TYPES = """
+        <http://meta.icos-cp.eu/resources/cpmeta/icosOtcL2Product>
+        <http://meta.icos-cp.eu/resources/cpmeta/icosOtcFosL2Product>
+    """
+    _QUERY_PREFIX = """prefix cpmeta: <http://meta.icos-cp.eu/ontologies/cpmeta/>
+                     prefix otcmeta: <http://meta.icos-cp.eu/ontologies/otcmeta/>
+                     prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                     prefix prov: <http://www.w3.org/ns/prov#>
+                     prefix xsd: <http://www.w3.org/2001/XMLSchema#>"""
+    _CP_PID_PREFIX = "https://meta.icos-cp.eu/objects/"
+    _OTC_STATION_ID_PREFIX = "http://meta.icos-cp.eu/resources/otcmeta/"
+    _OTC_STATION_ID_CACHE = dict()
+    _NEXT_QUERY_TIME = None
+    
+    _START_DATE = start_date
+    _END_DATE = end_date
+    _FILENAME = filename
+
+    query = f"""{_QUERY_PREFIX}
+    SELECT ?dobj ?timeStart ?timeEnd WHERE {{
+    VALUES ?spec {{ {_DATA_TYPES} }}
+    ?dobj cpmeta:hasObjectSpec ?spec .
+    ?dobj cpmeta:hasName ?fileName .
+    ?dobj cpmeta:hasStartTime | (cpmeta:wasAcquiredBy / prov:startedAtTime) ?timeStart .
+    ?dobj cpmeta:hasEndTime | (cpmeta:wasAcquiredBy / prov:endedAtTime) ?timeEnd .
+    FILTER(
+        ?timeStart >= "{start_date}"^^xsd:dateTime &&
+        ?timeEnd <= "{end_date}"^^xsd:dateTime
+    )
+    FILTER (CONTAINS(str(?fileName), "{filename}"))
+    }}
+    """
+    query_result = meta.sparql_select(query)
+    metadata['manifest']['CP'] = {'URI': query_result.bindings[0]["dobj"].uri,
+                                  'PID': query_result.bindings[0]["dobj"].uri.split("/")[-1]
+                                  }
+    return metadata
+    
 # Fill the missing data in the template xml file with data found in the metadata
 # and/or datafile
 #
-# TODO: retrieve url/doi from carbon portal
+# TODO: concentration gas
+#
 def get_value(tag, metadata):
     if 'metadataRecordCreationDate' in tag:
         value = dt.today().date().isoformat()
     if 'submissionDate' in tag:
         value = metadata['manifest']['metadata']['last_touched'][:10]
     if 'metadataURL' in tag:
-        value = 'TODO'
+        value = metadata['manifest']['CP']['URI']
     if 'datasetURL' in tag:
-        value = 'TODO'
+        value = metadata['manifest']['CP']['URI']
     if 'datasetDOI' in tag:
-        value = 'TODO'
+        value = metadata['manifest']['CP']['PID']
     if 'startDate' in tag:
         value = metadata['manifest']['exportFiles']['SOCAT']['validStartDate'][:10] # Should the date be "rounded"?
     if 'endDate' in tag:
@@ -76,12 +177,10 @@ def get_value(tag, metadata):
 
 # Recursive function that scans all the xml structure, looking for missing data
 #
-# TODO: missing data are currently filled with 'TK' value in the xml file. Probably
-# improvement to do here
-#
 # NB: for some reason the test for leave value within the loop causes the recursive
 # call to crash (something to do with local variables). To be investigated further
 # later on for optimisation.
+#
 def populate_xml(xml_data, metadata):
     if len(list(xml_data))==0:
             if xml_data.text == 'TK':
@@ -93,23 +192,73 @@ def populate_xml(xml_data, metadata):
 
 # Save the competed xml file into the data folder
 #
-# TODO: Verify folder organisation
 def save_xml(xml_data, tmp_folder):
     fname = os.path.join(tmp_folder, tmp_folder.split('/')[-1] + '.xml')
     xml_str = ET.tostring(xml_data).decode()
     with open(fname, 'w') as xml_file:
         xml_file.write(xml_str)
+        
+# Find the value corresponding to a keys tree in the given xml etree.
+# If several values are found, a semicolumn separated string is returned
+#
+def find_leaf(xml_data, keys):
+    xml_prefix = xml_data.tag.replace('oads_metadata', '')
+    s = xml_prefix + keys.replace('/', '/' + xml_prefix)
+    leaf = []
+    if keys.split('/')[-1] == 'name':
+        first = xml_data.findall(s + '/' + xml_prefix + 'first')
+        last = xml_data.findall(s + '/' + xml_prefix + 'last')
+        for f, l in zip(first, last):
+            leaf.append(', '.join([l.text, f.text[0]]))
+    else:
+        for txt in xml_data.findall(s):
+            leaf.append(txt.text)
+    return '; '.join(leaf)
+
+# Add the "SOCAT" header to the datafile
+#
+def write_header(data_file, xml_data):
+    # Prepare the header from the xml metadata
+    expocode = find_leaf(xml_data, 'expocodes/expocode')
+    vessel = find_leaf(xml_data, 'platforms/platform/name')
+    pi = find_leaf(xml_data, 'investigators/investigator/name')
+    vtype = find_leaf(xml_data, 'platforms/platform/type')
+    h = (f"Expocode: {expocode}\nVessel name: {vessel}\nPIs: {pi}\n"
+         f"Vessel type: {vtype} \n")
+    # Read the content of the existing file
+    with open(data_fname, "r") as f:
+        content = f.read()
+    # Write header + existing content
+    with open(data_fname, "w") as f:
+        f.write(h + content)
+    
+    
+# Remove extra files unecessary for SOCAT import.
+#
+def repack_preclean(tmp_folder):
+    flist = glob.glob(os.path.join(tmp_folder, '*'))
+    for f in flist:
+        if ('.zip' in f) | ('/raw' in f):
+            subprocess.run(['rm', '-rf', f], check=True)
+    flist = glob.glob(os.path.join(tmp_folder, 'dataset', '*'))
+    for f in flist:
+        if '/SOCAT' not in f:
+            subprocess.run(['rm', '-rf', f], check=True)
 
 # Recompress the data into a zip ready for upload.
 #
-# TODO: Verify structure and maybe clean extra/unecessary files (for instance raw/)
-def repack_zip(tmp_folder, data_file):
-    with zipfile.ZipFile(data_file, 'w') as zipf:
+def repack_zip(tmp_folder, out_folder, zip_fname):
+    print('Removing unecessary files', end='...')
+    repack_preclean(tmp_folder)
+    print('Done')
+    print('Compressing SOCAT files', end='...')
+    with zipfile.ZipFile(os.path.join(out_folder, zip_fname), 'w') as zipf:
         for root, dirs, files in os.walk(tmp_folder):
             for file in files:
                 zipf.write(os.path.join(root, file), 
                            os.path.relpath(os.path.join(root, file), 
                                            os.path.join(tmp_folder, '..')))
+    print('Done')
 
 # Clean up the temporary files to avoid unecessary fill up of hard-drive
 def clean_tmp(tmp_folder):
@@ -120,32 +269,113 @@ def clean_tmp(tmp_folder):
             os.rmdir(os.path.join(root, name))
     os.rmdir(tmp_folder)
 
-# Define various useful path and file names
-#
-# TODO: modify the main script to be able to call it as a command line with 
-# parameters directly for terminal to easy processing
-base_path = 'Data/'
-tmp_path = '/tmp/'
-xml_path = ''
-xml_fname = '1199_template.xml'
-data_path = ''
-zip_fname = '1199.zip'
-zip_fname = 'NRT74FS1695385225200.zip'
 
-# Create the file names with full path
-xml_file = os.path.join(base_path, xml_path, xml_fname)
-data_file = os.path.join(base_path, data_path, zip_fname)
-tmp_folder = os.path.join(tmp_path, zip_fname.split('.')[0])
+if __name__ == '__main__':
+    import argparse
+    import sys
 
-# Import the template xml file data
-xml_data = import_xml(xml_file)
-# Import the metadata from manifest.json and data from .tsv file
-metadata, data = import_metadata(tmp_folder, data_file)
-# Fill up the missing metadata in the xml file
-xml_data = populate_xml(xml_data, metadata)
-# write the xml file to disk
-save_xml(xml_data, tmp_folder)
-# Recompress the data with updated metadata into a file for import into SOCAT
-repack_zip(tmp_folder, data_file)
-# Clean after yourself :)
-clean_tmp(tmp_folder)
+    parser = argparse.ArgumentParser(
+        description = 'Script to prepare dataset for SOCAT upload.')
+    parser.add_argument('-v', '--version', action = 'version',
+                           version = '%(prog)s ' + __version__,
+                           help = 'Print out script version and quit.')
+    parser.add_argument('-n', '--name', type = str,
+                        help = 'Filename associated to the dataset.')
+    parser.add_argument('-S', '--SOCAT', '--template', type = str,
+                        help = "SOCAT xml template file.\n"
+                               "Defines the name of the xml template file containing all the metadata not retrieved from the Carbon Portal."
+                               "The xml file should be avialable in the \"Data\" folder"
+                               )
+    parser.add_argument('-t', '--tmp', '--temp', type = str,
+                        help = "(optional) Temp folder path.\n"
+                               "Defines the folder used to temporarly store all downloaded data before repacking it into a zip file."
+                               "By defalt this value is set to '/tmp/'"
+                               )
+    parser.add_argument('-o', '--output', type = str,
+                        help = "(optional) Output folder path.\n"
+                               "Defines the folder where the final zip file containing the data ready for SOCAT import will be stored."
+                               "By defalt this value is set to the the current working folder"
+                               )
+    parser.add_argument('-d', '--data', type = str,
+                        help = "(optional) Data folder path.\n"
+                               "Defines the folder containing the base data (xml template and config file) for the script to work."
+                               "By defalt this value is set to 'Data/'"
+                               )
+# The followings will be used in future developments
+    # parser.add_argument('-a', '--author', type = str,
+    #                     help = '(optional) Name of the author of the dataset.')
+    # parser.add_argument('-sd', '--startdate', type = str,
+    #                     help = '(optional) Dataset starting date.')
+    # parser.add_argument('-ed', '--enddate', type = str,
+    #                     help = '(optional) Dataset ending date.')
+    args = parser.parse_args()
+    
+    if args.name == None:
+        print('Missing dataset name parameter! Unable to proceed...')
+        parser.print_help()
+        sys.exit(-2)
+    elif args.SOCAT== None:
+        print('Missing template file parameter! Unable to proceed...')
+        parser.print_help()
+        sys.exit(-3)
+    else:
+        dataset_name = args.name
+        if '.zip' in dataset_name:
+            zip_fname = dataset_name
+            dataset_name = dataset_name[:-4]
+        else:
+            zip_fname = dataset_name + '.zip'
+    # xml_fname = '1199_template.xml'
+        xml_fname = args.SOCAT
+        if '.xml' not in xml_fname:
+            xml_fname = xml_fname + '.xml'
+
+    # Retrieve arguments and define various paths and file names
+    if args.tmp != None:
+        tmp_path = args.tmp
+    else:
+        tmp_path = '/tmp/'
+    if args.output != None:
+        out_folder = args.output
+    else:
+        out_folder = ''
+    if args.data != None:
+        base_path = args.data
+    else:
+        base_path = 'Data/'
+    # Initialise file names with full path
+    # Create potentially missing folders
+    xml_file = os.path.join(base_path, xml_fname)
+    tmp_folder = os.path.join(tmp_path, dataset_name)
+    make_folder(tmp_folder)
+    data_file = os.path.join(tmp_folder, zip_fname)
+    make_folder(tmp_folder)
+    data_fname = os.path.join(
+        tmp_folder,
+        'dataset',
+        'SOCAT',
+        dataset_name + '.tsv'
+        )
+    
+    # Retreive the dataset from QuinCe
+    QuinCe_API(dataset_name, data_file)
+    # Import the template xml file data
+    xml_data = import_xml(xml_file)
+    # Import the metadata from manifest.json and data from .tsv file
+    metadata = import_metadata(tmp_folder, data_file)
+    # Retreive the missing metadata from CarbonPortal
+    metadata = get_CP_metadata(
+        metadata['manifest']['metadata']['name'],
+        metadata['manifest']['metadata']['startdate'],
+        metadata['manifest']['metadata']['enddate']
+        )
+    # Fill up the missing metadata in the xml file
+    xml_data = populate_xml(xml_data, metadata)
+    # write the xml file to disk
+    save_xml(xml_data, tmp_folder)
+    # write the header to the cvs file
+    write_header(data_file, xml_data)
+    # Recompress the data with updated metadata into a file for import into SOCAT
+    repack_zip(tmp_folder, out_folder, zip_fname)
+    # Clean after yourself :)
+    clean_tmp(tmp_folder)
