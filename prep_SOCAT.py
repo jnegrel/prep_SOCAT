@@ -3,17 +3,17 @@
 """
 Created on Tue Feb 18 13:54:03 2025
 
-@author: Jean Negrel
+@author: Jean Negrel (jean.negrel@norceresearch.no), NORCE Research AS, Bergen
 """
 
 # Major version number.
-__major__ = '0'
+__major__ = '1'
 # Minor version number.
-__minor__ = '9'
+__minor__ = '0'
 # Script version.
 __version__ = __major__ + '.' + __minor__
 
-# TODO: Do some cleaning of the script and add Error: management
+# TODO: Do some cleaning of the script and add error management
 
 import os
 import sys
@@ -33,8 +33,8 @@ def make_folder(folder):
             try:
                 os.makedirs(folder)
             except OSError as e:
-                print("Error: creating the data folder:", e)
-                sys.exit(-4)
+                print("Error: could not create the folder:", e)
+                sys.exit(3)
 
 # Run a QuinCE API call to download the dataset corresponding to the given filename
 #
@@ -49,7 +49,7 @@ def QuinCe_API(dataset_name, data_file):
             cred = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print("Error loading credentials file:", e)
-        sys.exit(-4)
+        sys.exit(3)
     url = cred['url']
     username = cred['username']
     password = cred['password']
@@ -79,14 +79,14 @@ def QuinCe_API(dataset_name, data_file):
                 print("File downloaded successfully! (%5.2f %s written)" % (fsize, size_str))
             except requests.exceptions.RequestException as e:
                 print("Error downloading the dataset file:", e)
-                sys.exit(-5)
+                sys.exit(4)
         else:
             print('Looks like the zip file is empty...')
-            sys.exit(-6)
+            sys.exit(4)
     else:
-        print(f"Error: connectoin failed! Status code: {response.status_code}")
+        print(f"Error: connection failed! Status code: {response.status_code}")
         print("Response content:\n", response.content)
-        sys.exit(-1)
+        sys.exit(4)
     
 # Read template xml file and return it
 #
@@ -95,7 +95,7 @@ def import_xml(xml_file):
         tree = ET.parse(xml_file)
     except (FileNotFoundError, ET.ParseError) as e:
         print('Error loading the template file: ', xml_file, e)
-        sys.exit(-7)
+        sys.exit(5)
     root = tree.getroot()
     return root
 
@@ -107,7 +107,7 @@ def unzip_data(data_file):
             zipf.extractall(tmp_path)
     except zipfile.Error as e:
         print('Error while unzipping the dataset file: ', e)
-        sys.exit(-8)
+        sys.exit(5)
     try:
         os.remove(data_file)
     except OSError as e:
@@ -126,7 +126,7 @@ def import_metadata(tmp_folder, data_file):
             metadata = json.load(file)
     except (OSError, json.JSONDecodeError) as e:
         print('Error: could not load "manifest.json" metadata: ', e)
-        sys.exit(-9)
+        sys.exit(5)
     return metadata
 
 def get_CP_metadata(filename, start_date, end_date):
@@ -139,15 +139,6 @@ def get_CP_metadata(filename, start_date, end_date):
                      prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
                      prefix prov: <http://www.w3.org/ns/prov#>
                      prefix xsd: <http://www.w3.org/2001/XMLSchema#>"""
-    _CP_PID_PREFIX = "https://meta.icos-cp.eu/objects/"
-    _OTC_STATION_ID_PREFIX = "http://meta.icos-cp.eu/resources/otcmeta/"
-    _OTC_STATION_ID_CACHE = dict()
-    _NEXT_QUERY_TIME = None
-    
-    _START_DATE = start_date
-    _END_DATE = end_date
-    _FILENAME = filename
-
     query = f"""{_QUERY_PREFIX}
     SELECT ?dobj ?timeStart ?timeEnd WHERE {{
     VALUES ?spec {{ {_DATA_TYPES} }}
@@ -166,9 +157,10 @@ def get_CP_metadata(filename, start_date, end_date):
         query_result = meta.sparql_select(query)
     except Exception as e:
         print('Error while running SPARQL query: ', e)
+        sys.exit(6)
     if len(query_result.bindings) == 0:
         print('Error: SPARQL query returned no data')
-        sys.exit(-10)
+        sys.exit(6)
     metadata['manifest']['CP'] = {'URI': query_result.bindings[0]["dobj"].uri,
                                   'PID': query_result.bindings[0]["dobj"].uri.split("/")[-1]
                                   }
@@ -182,27 +174,27 @@ def get_CP_metadata(filename, start_date, end_date):
 def get_value(tag, metadata):
     if 'metadataRecordCreationDate' in tag:
         value = dt.today().date().isoformat()
-    if 'submissionDate' in tag:
+    elif 'submissionDate' in tag:
         value = metadata['manifest']['metadata']['last_touched'][:10]
-    if 'metadataURL' in tag:
+    elif 'metadataURL' in tag:
         value = metadata['manifest']['CP']['URI']
-    if 'datasetURL' in tag:
+    elif 'datasetURL' in tag:
         value = metadata['manifest']['CP']['URI']
-    if 'datasetDOI' in tag:
+    elif 'datasetDOI' in tag:
         value = metadata['manifest']['CP']['PID']
-    if 'startDate' in tag:
+    elif 'startDate' in tag:
         value = metadata['manifest']['exportFiles']['SOCAT']['validStartDate'][:10] # Should the date be "rounded"?
-    if 'endDate' in tag:
+    elif 'endDate' in tag:
         value = metadata['manifest']['exportFiles']['SOCAT']['validEndDate'][:10] # Same question?
-    if 'westernBounds' in tag:
+    elif 'westernBounds' in tag:
         value = str(metadata['manifest']['exportFiles']['SOCAT']['validBounds']['west'])
-    if 'easternBounds' in tag:
+    elif 'easternBounds' in tag:
         value = str(metadata['manifest']['exportFiles']['SOCAT']['validBounds']['east'])
-    if 'northernBounds' in tag:
+    elif 'northernBounds' in tag:
         value = str(metadata['manifest']['exportFiles']['SOCAT']['validBounds']['north'])
-    if 'southernBounds' in tag:
+    elif 'southernBounds' in tag:
         value = str(metadata['manifest']['exportFiles']['SOCAT']['validBounds']['south'])
-    if 'expocode' in tag:
+    elif 'expocode' in tag:
         value = metadata['manifest']['metadata']['name']
     else:
         value = 'TK'
@@ -234,7 +226,7 @@ def save_xml(xml_data, tmp_folder):
             xml_file.write(xml_str)
     except OSError as e:
         print('Error: could not save the metadata to the xml file: ', e)
-        sys.exit(-11)
+        sys.exit(5)
         
 # Find the value corresponding to a keys tree in the given xml etree.
 # If several values are found, a semicolon separated string is returned
@@ -272,7 +264,7 @@ def write_header(data_file, xml_data):
             f.write(h + content)
     except OSError as e:
         print('Error: could not save the data file header: ', e)
-        sys.exit(-11)
+        sys.exit(5)
     
     
 # Remove extra files unnecessary for SOCAT import.
@@ -288,8 +280,8 @@ def repack_preclean(tmp_folder):
             if '/SOCAT' not in f:
                 subprocess.run(['rm', '-rf', f], check=True)
     except (OSError, subprocess.CalledProcessError) as e:
-        print('Error while preparing the dataset for repacking: ', e)
-        sys.exit(-12)
+        print('Error: could not prepare the dataset for repacking: ', e)
+        sys.exit(5)
 
 # Recompress the data into a zip ready for upload.
 #
@@ -306,8 +298,8 @@ def repack_zip(tmp_folder, out_folder, zip_fname):
                                os.path.relpath(os.path.join(root, file), 
                                                os.path.join(tmp_folder, '..')))
     except OSError as e:
-        print('Error while zipping the dataset for repacking: ', e)
-        sys.exit(-13)
+        print('Error: could not create the output zip file: ', e)
+        sys.exit(5)
     print('Done')
 
 # Clean up the temporary files to avoid unnecessary fill up of hard-drive
@@ -320,7 +312,7 @@ def clean_tmp(tmp_folder):
                 os.rmdir(os.path.join(root, name))
         os.rmdir(tmp_folder)
     except OSError as e:
-        print('Warning while cleaning up the temporary files: ', e)
+        print('Warning: could not clean up the temporary files: ', e)
 
 if __name__ == '__main__':
     import argparse
@@ -345,7 +337,7 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output', type = str,
                         help = "(optional) Output folder path.\n"
                                "Defines the folder where the final zip file containing the data ready for SOCAT import will be stored."
-                               "By default this value is set to the the current working folder"
+                               "By default this value is set to the current working folder"
                                )
     parser.add_argument('-d', '--data', type = str,
                         help = "(optional) Data folder path.\n"
@@ -364,11 +356,11 @@ if __name__ == '__main__':
     if args.name == None:
         print('Missing dataset name parameter! Unable to proceed...')
         parser.print_help()
-        sys.exit(-2)
+        sys.exit(2)
     elif args.SOCAT== None:
         print('Missing template file parameter! Unable to proceed...')
         parser.print_help()
-        sys.exit(-3)
+        sys.exit(2)
     else:
         dataset_name = args.name
         if '.zip' in dataset_name:
@@ -428,5 +420,5 @@ if __name__ == '__main__':
     write_header(data_file, xml_data)
     # Recompress the data with updated metadata into a file for import into SOCAT
     repack_zip(tmp_folder, out_folder, zip_fname)
-    # Clean after yourself :)
+    # Clean up after yourself :)
     clean_tmp(tmp_folder)
