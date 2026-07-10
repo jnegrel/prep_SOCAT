@@ -57,7 +57,7 @@ def QuinCe_API(dataset_name, data_file):
     # Connect to the QuinCe API
     session = requests.Session()
     session.auth = HTTPBasicAuth(username, password)
-    response = session.post(url + 'downloadDataset', data={'datasetName': dataset_name}, stream=True)
+    response = session.post(url + 'export/downloadDataset', data={'datasetName': dataset_name}, stream=True)
     # if the connection has been successful, retrieve the dataset
     if response.status_code == 200:
         print('Connection successful!')
@@ -409,8 +409,8 @@ if __name__ == '__main__':
     # Retrieve the missing metadata from CarbonPortal
     metadata = get_CP_metadata(
         metadata['manifest']['metadata']['name'],
-        metadata['manifest']['metadata']['startdate'],
-        metadata['manifest']['metadata']['enddate']
+        metadata['manifest']['metadata']['start'],
+        metadata['manifest']['metadata']['end']
         )
     # Fill up the missing metadata in the xml file
     xml_data = populate_xml(xml_data, metadata)
