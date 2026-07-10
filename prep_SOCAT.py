@@ -231,11 +231,11 @@ def save_xml(xml_data, tmp_folder):
 # Find the value corresponding to a keys tree in the given xml etree.
 # If several values are found, a semicolon separated string is returned
 #
-def find_leaf(xml_data, keys):
+def find_leaf(xml_data, keys, multiple_entries=False):
     xml_prefix = xml_data.tag.replace('oads_metadata', '')
     s = xml_prefix + keys.replace('/', '/' + xml_prefix)
     leaf = []
-    if keys.split('/')[-1] == 'name':
+    if multiple_entries:
         first = xml_data.findall(s + '/' + xml_prefix + 'first')
         last = xml_data.findall(s + '/' + xml_prefix + 'last')
         for f, l in zip(first, last):
@@ -251,7 +251,7 @@ def write_header(data_file, xml_data):
     # Prepare the header from the xml metadata
     expocode = find_leaf(xml_data, 'expocodes/expocode')
     vessel = find_leaf(xml_data, 'platforms/platform/name')
-    pi = find_leaf(xml_data, 'investigators/investigator/name')
+    pi = find_leaf(xml_data, 'investigators/investigator/name', multiple_entries=True)
     vtype = find_leaf(xml_data, 'platforms/platform/type')
     h = (f"Expocode: {expocode}\nVessel name: {vessel}\nPIs: {pi}\n"
          f"Vessel type: {vtype} \n")
