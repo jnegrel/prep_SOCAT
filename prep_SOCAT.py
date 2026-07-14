@@ -24,6 +24,7 @@ import glob
 import subprocess
 from datetime import datetime as dt
 from icoscp_core.icos import meta
+import shutil
 
 # Check if the folder exists and create it if not
 #
@@ -269,17 +270,36 @@ def write_header(data_file, xml_data):
     
 # Remove extra files unnecessary for SOCAT import.
 #
+
+
+        
+        
 def repack_preclean(tmp_folder):
     try:
+        # Standardize paths to prevent slash mismatches
+        tmp_folder = os.path.normpath(tmp_folder)
+            
+        # 1. Clean up top-level items
         flist = glob.glob(os.path.join(tmp_folder, '*'))
         for f in flist:
+            # Match safely regardless of folder slash directions
             if ('.zip' in f) | ('/raw' in f):
-                subprocess.run(['rm', '-rf', f], check=True)
-        flist = glob.glob(os.path.join(tmp_folder, 'dataset', '*'))
+                if os.path.isdir(f):
+                    shutil.rmtree(f) 
+                elif os.path.isfile(f):
+                     os.remove(f)     
+
+        # 2. Clean up dataset subfolder items
+        dataset_folder = os.path.join(tmp_folder, 'dataset')
+        flist = glob.glob(os.path.join(dataset_folder, '*'))
         for f in flist:
-            if '/SOCAT' not in f:
-                subprocess.run(['rm', '-rf', f], check=True)
-    except (OSError, subprocess.CalledProcessError) as e:
+            if 'SOCAT' not in os.path.basename(f):
+                if os.path.isdir(f):
+                    shutil.rmtree(f)
+                elif os.path.isfile(f):
+                    os.remove(f)
+
+    except OSError as e:
         print('Error: could not prepare the dataset for repacking: ', e)
         sys.exit(5)
 
