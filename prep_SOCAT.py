@@ -24,6 +24,7 @@ import glob
 import subprocess
 from datetime import datetime as dt
 from icoscp_core.icos import meta
+import shutil
 
 # Check if the folder exists and create it if not
 #
@@ -57,7 +58,7 @@ def QuinCe_API(dataset_name, data_file):
     # Connect to the QuinCe API
     session = requests.Session()
     session.auth = HTTPBasicAuth(username, password)
-    response = session.post(url + 'downloadDataset', data={'datasetName': dataset_name}, stream=True)
+    response = session.post(url + 'export/downloadDataset', data={'datasetName': dataset_name}, stream=True)
     # if the connection has been successful, retrieve the dataset
     if response.status_code == 200:
         print('Connection successful!')
@@ -231,11 +232,11 @@ def save_xml(xml_data, tmp_folder):
 # Find the value corresponding to a keys tree in the given xml etree.
 # If several values are found, a semicolon separated string is returned
 #
-def find_leaf(xml_data, keys):
+def find_leaf(xml_data, keys, multiple_entries=False):
     xml_prefix = xml_data.tag.replace('oads_metadata', '')
     s = xml_prefix + keys.replace('/', '/' + xml_prefix)
     leaf = []
-    if keys.split('/')[-1] == 'name':
+    if multiple_entries:
         first = xml_data.findall(s + '/' + xml_prefix + 'first')
         last = xml_data.findall(s + '/' + xml_prefix + 'last')
         for f, l in zip(first, last):
@@ -251,7 +252,7 @@ def write_header(data_file, xml_data):
     # Prepare the header from the xml metadata
     expocode = find_leaf(xml_data, 'expocodes/expocode')
     vessel = find_leaf(xml_data, 'platforms/platform/name')
-    pi = find_leaf(xml_data, 'investigators/investigator/name')
+    pi = find_leaf(xml_data, 'investigators/investigator/name', multiple_entries=True)
     vtype = find_leaf(xml_data, 'platforms/platform/type')
     h = (f"Expocode: {expocode}\nVessel name: {vessel}\nPIs: {pi}\n"
          f"Vessel type: {vtype} \n")
@@ -269,17 +270,36 @@ def write_header(data_file, xml_data):
     
 # Remove extra files unnecessary for SOCAT import.
 #
+
+
+        
+        
 def repack_preclean(tmp_folder):
     try:
+        # Standardize paths to prevent slash mismatches
+        tmp_folder = os.path.normpath(tmp_folder)
+            
+        # 1. Clean up top-level items
         flist = glob.glob(os.path.join(tmp_folder, '*'))
         for f in flist:
+            # Match safely regardless of folder slash directions
             if ('.zip' in f) | ('/raw' in f):
-                subprocess.run(['rm', '-rf', f], check=True)
-        flist = glob.glob(os.path.join(tmp_folder, 'dataset', '*'))
+                if os.path.isdir(f):
+                    shutil.rmtree(f) 
+                elif os.path.isfile(f):
+                     os.remove(f)     
+
+        # 2. Clean up dataset subfolder items
+        dataset_folder = os.path.join(tmp_folder, 'dataset')
+        flist = glob.glob(os.path.join(dataset_folder, '*'))
         for f in flist:
-            if '/SOCAT' not in f:
-                subprocess.run(['rm', '-rf', f], check=True)
-    except (OSError, subprocess.CalledProcessError) as e:
+            if 'SOCAT' not in os.path.basename(f):
+                if os.path.isdir(f):
+                    shutil.rmtree(f)
+                elif os.path.isfile(f):
+                    os.remove(f)
+
+    except OSError as e:
         print('Error: could not prepare the dataset for repacking: ', e)
         sys.exit(5)
 
@@ -409,8 +429,8 @@ if __name__ == '__main__':
     # Retrieve the missing metadata from CarbonPortal
     metadata = get_CP_metadata(
         metadata['manifest']['metadata']['name'],
-        metadata['manifest']['metadata']['startdate'],
-        metadata['manifest']['metadata']['enddate']
+        metadata['manifest']['metadata']['start'],
+        metadata['manifest']['metadata']['end']
         )
     # Fill up the missing metadata in the xml file
     xml_data = populate_xml(xml_data, metadata)
