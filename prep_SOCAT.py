@@ -216,11 +216,21 @@ def populate_xml(xml_data, metadata):
         child = populate_xml(child, metadata)
     return xml_data
 
+# Get the default namespace from the imported XML
+def get_namespace_uri(el):
+    # ChatGPT gave me this. I hope it works - Steve
+    if el.tag.startswith("{"):
+        return el.tag.split("}", 1)[0][1:]
+    return None
 
 # Save the completed xml file into the data folder
 #
 def save_xml(xml_data, tmp_folder):
     fname = os.path.join(tmp_folder, tmp_folder.split('/')[-1] + '.xml')
+    
+    # We want to use the default (empty) namespace on export
+    ET.register_namespace("", get_namespace_uri(xml_data))
+    
     xml_str = ET.tostring(xml_data).decode()
     try:
         with open(fname, 'w') as xml_file:
@@ -270,10 +280,6 @@ def write_header(data_file, xml_data):
     
 # Remove extra files unnecessary for SOCAT import.
 #
-
-
-        
-        
 def repack_preclean(tmp_folder):
     try:
         # Standardize paths to prevent slash mismatches
