@@ -9,7 +9,7 @@ Created on Tue Feb 18 13:54:03 2025
 # Major version number.
 __major__ = '1'
 # Minor version number.
-__minor__ = '0'
+__minor__ = '1'
 # Script version.
 __version__ = __major__ + '.' + __minor__
 
@@ -20,30 +20,17 @@ import sys
 import xml.etree.ElementTree as ET
 import json
 import zipfile
-import glob
-import subprocess
+import tempfile
 from datetime import datetime as dt
 from icoscp_core.icos import meta
 import shutil
-
-# Check if the folder exists and create it if not
-#
-def make_folder(folder):
-    if (folder != '') & (folder != '.'):
-        if not os.path.isdir(folder):
-            try:
-                os.makedirs(folder)
-            except OSError as e:
-                print("Error: could not create the folder:", e)
-                sys.exit(3)
 
 # Run a QuinCE API call to download the dataset corresponding to the given filename
 #
 def QuinCe_API(dataset_name, data_file):
     import requests
     from requests.auth import HTTPBasicAuth
-    import json
-    
+
     # Load configuration for the QuinCe instance
     try:
         with open(os.path.join(base_path, 'credentials.json')) as f:
@@ -71,7 +58,7 @@ def QuinCe_API(dataset_name, data_file):
                 if fsize >= 1024:
                     if fsize >= 1024*1024:
                         size_str = 'MB'
-                        fsize = fsize/1024*1024
+                        fsize = fsize/(1024*1024)
                     else:
                         size_str = 'kB'
                         fsize = fsize/1024
@@ -114,16 +101,14 @@ def unzip_data(data_file):
     except OSError as e:
         print('Warning: the zip file could not be removed: ', e)
 
-# Load the metadata contained in the manifest.json file as well as the data in
-# the tsv file.
-# The original data zipfile is unpacked into the temp folder in order to load
-# the .tsv file.
+# Unpack the archive exported from QuinCe into the temp folder (which also makes
+# the .tsv data file available) and load the metadata from the manifest.json file.
 #
 def import_metadata(tmp_folder, data_file):
     unzip_data(data_file)
-    metadata_fname = os.path.join(tmp_folder, 'manifest.json')
+    manifest_file = os.path.join(tmp_folder, 'manifest.json')
     try:
-        with open(metadata_fname, 'r') as file:
+        with open(manifest_file, 'r') as file:
             metadata = json.load(file)
     except (OSError, json.JSONDecodeError) as e:
         print('Error: could not load "manifest.json" metadata: ', e)
@@ -217,10 +202,10 @@ def populate_xml(xml_data, metadata):
     return xml_data
 
 
-# Save the completed xml file into the data folder
+# Save the completed xml file into the temporary folder
 #
 def save_xml(xml_data, tmp_folder):
-    fname = os.path.join(tmp_folder, tmp_folder.split('/')[-1] + '.xml')
+    fname = os.path.join(tmp_folder, os.path.basename(tmp_folder) + '.xml')
     xml_str = ET.tostring(xml_data).decode()
     try:
         with open(fname, 'w') as xml_file:
@@ -228,6 +213,7 @@ def save_xml(xml_data, tmp_folder):
     except OSError as e:
         print('Error: could not save the metadata to the xml file: ', e)
         sys.exit(5)
+    return fname
         
 # Find the value corresponding to a keys tree in the given xml etree.
 # If several values are found, a semicolon separated string is returned
@@ -248,7 +234,7 @@ def find_leaf(xml_data, keys, multiple_entries=False):
 
 # Add the "SOCAT" header to the datafile
 #
-def write_header(data_file, xml_data):
+def write_header(tsv_file, xml_data):
     # Prepare the header from the xml metadata
     expocode = find_leaf(xml_data, 'expocodes/expocode')
     vessel = find_leaf(xml_data, 'platforms/platform/name')
@@ -258,79 +244,45 @@ def write_header(data_file, xml_data):
          f"Vessel type: {vtype} \n")
     try:
         # Read the content of the existing file
-        with open(data_fname, "r") as f:
+        with open(tsv_file, "r") as f:
             content = f.read()
         # Write header + existing content
-        with open(data_fname, "w") as f:
+        with open(tsv_file, "w") as f:
             f.write(h + content)
     except OSError as e:
         print('Error: could not save the data file header: ', e)
         sys.exit(5)
-    
-    
-# Remove extra files unnecessary for SOCAT import.
+
+# Check if the folder exists and create it if not
 #
-
-
-        
-        
-def repack_preclean(tmp_folder):
-    try:
-        # Standardize paths to prevent slash mismatches
-        tmp_folder = os.path.normpath(tmp_folder)
-            
-        # 1. Clean up top-level items
-        flist = glob.glob(os.path.join(tmp_folder, '*'))
-        for f in flist:
-            # Match safely regardless of folder slash directions
-            if ('.zip' in f) | ('/raw' in f):
-                if os.path.isdir(f):
-                    shutil.rmtree(f) 
-                elif os.path.isfile(f):
-                     os.remove(f)     
-
-        # 2. Clean up dataset subfolder items
-        dataset_folder = os.path.join(tmp_folder, 'dataset')
-        flist = glob.glob(os.path.join(dataset_folder, '*'))
-        for f in flist:
-            if 'SOCAT' not in os.path.basename(f):
-                if os.path.isdir(f):
-                    shutil.rmtree(f)
-                elif os.path.isfile(f):
-                    os.remove(f)
-
-    except OSError as e:
-        print('Error: could not prepare the dataset for repacking: ', e)
-        sys.exit(5)
-
-# Recompress the data into a zip ready for upload.
+def make_folder(folder):
+    if (folder != '') & (folder != '.'):
+        if not os.path.isdir(folder):
+            try:
+                os.makedirs(folder)
+            except OSError as e:
+                print("Error: could not create the folder:", e)
+                sys.exit(3)
+                
+# Move the SOCAT tsv and xml files to the output folder.
 #
-def repack_zip(tmp_folder, out_folder, zip_fname):
-    print('Removing unnecessary files', end='...')
-    repack_preclean(tmp_folder)
-    print('Done')
-    print('Compressing SOCAT files', end='...')
+def move_to_output(tsv_file, xml_file, out_folder):
+    # Ensure the output folder exists before moving files into it
+    make_folder(out_folder)
+    print('Copying SOCAT files to output folder', end='...')
     try:
-        with zipfile.ZipFile(os.path.join(out_folder, zip_fname), 'w') as zipf:
-            for root, dirs, files in os.walk(tmp_folder):
-                for file in files:
-                    zipf.write(os.path.join(root, file), 
-                               os.path.relpath(os.path.join(root, file), 
-                                               os.path.join(tmp_folder, '..')))
+        shutil.move(tsv_file, out_folder)
+        shutil.move(xml_file, out_folder)
     except OSError as e:
-        print('Error: could not create the output zip file: ', e)
+        print('Error: could not copy files to the output folder: ', e)
         sys.exit(5)
     print('Done')
 
 # Clean up the temporary files to avoid unnecessary fill up of hard-drive
+#
 def clean_tmp(tmp_folder):
     try:
-        for root, dirs, files in os.walk(tmp_folder, topdown=False):
-            for name in files:
-                os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-        os.rmdir(tmp_folder)
+        shutil.rmtree(tmp_folder)
     except OSError as e:
         print('Warning: could not clean up the temporary files: ', e)
 
@@ -351,13 +303,13 @@ if __name__ == '__main__':
                                )
     parser.add_argument('-t', '--tmp', '--temp', type = str,
                         help = "(optional) Temp folder path.\n"
-                               "Defines the folder used to temporarily store all downloaded data before repacking it into a zip file."
-                               "By default this value is set to '/tmp/'"
+                               "Defines the folder used to temporarily store all downloaded data before processing."
+                               "By default this value is set to the system temporary folder."
                                )
     parser.add_argument('-o', '--output', type = str,
                         help = "(optional) Output folder path.\n"
-                               "Defines the folder where the final zip file containing the data ready for SOCAT import will be stored."
-                               "By default this value is set to the current working folder"
+                               "Defines the folder where the final data and xml files containing the data ready for SOCAT import will be stored."
+                               "By default this value is set to the dataset name"
                                )
     parser.add_argument('-d', '--data', type = str,
                         help = "(optional) Data folder path.\n"
@@ -388,7 +340,6 @@ if __name__ == '__main__':
             dataset_name = dataset_name[:-4]
         else:
             zip_fname = dataset_name + '.zip'
-    # xml_fname = '1199_template.xml'
         xml_fname = args.SOCAT
         if '.xml' not in xml_fname:
             xml_fname = xml_fname + '.xml'
@@ -397,11 +348,11 @@ if __name__ == '__main__':
     if args.tmp != None:
         tmp_path = args.tmp
     else:
-        tmp_path = '/tmp/'
+        tmp_path = tempfile.gettempdir()
     if args.output != None:
         out_folder = args.output
     else:
-        out_folder = ''
+        out_folder = dataset_name
     if args.data != None:
         base_path = args.data
     else:
@@ -412,12 +363,12 @@ if __name__ == '__main__':
     tmp_folder = os.path.join(tmp_path, dataset_name)
     make_folder(tmp_folder)
     data_file = os.path.join(tmp_folder, zip_fname)
-    make_folder(tmp_folder)
-    data_fname = os.path.join(
+    tsv_fname = dataset_name + '.tsv'
+    tsv_file = os.path.join(
         tmp_folder,
         'dataset',
         'SOCAT',
-        dataset_name + '.tsv'
+        tsv_fname
         )
     
     # Retrieve the dataset from QuinCe
@@ -435,10 +386,10 @@ if __name__ == '__main__':
     # Fill up the missing metadata in the xml file
     xml_data = populate_xml(xml_data, metadata)
     # write the xml file to disk
-    save_xml(xml_data, tmp_folder)
+    out_xml_file = save_xml(xml_data, tmp_folder)
     # write the header to the tsv file
-    write_header(data_file, xml_data)
-    # Recompress the data with updated metadata into a file for import into SOCAT
-    repack_zip(tmp_folder, out_folder, zip_fname)
+    write_header(tsv_file, xml_data)
+    # Move the tsv and xml files to the output folder for import into SOCAT
+    move_to_output(tsv_file, out_xml_file, out_folder)
     # Clean up after yourself :)
     clean_tmp(tmp_folder)

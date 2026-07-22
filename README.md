@@ -10,7 +10,7 @@ A Python script to automate the preparation of oceanographic datasets for submis
 2. **[ICOS Carbon Portal](https://www.icos-cp.eu/)** – data repository providing persistent identifiers (PIDs/DOIs)
 3. **OADS XML template** – a dataset-specific metadata file pre-filled by the user (see [XML template](#xml-template))
 
-The script downloads a dataset from QuinCE, enriches it with metadata from the Carbon Portal, populates a SOCAT-compliant OADS XML metadata file, prepends the required SOCAT header to the TSV data file, and repackages everything into a zip archive ready for SOCAT upload.
+The script downloads a dataset from QuinCE, enriches it with metadata from the Carbon Portal, populates a SOCAT-compliant OADS XML metadata file, prepends the required SOCAT header to the TSV data file, and copies the resulting `.tsv` and `.xml` files to an output folder ready for SOCAT upload. The script runs on both Linux and Windows.
 
 ## Workflow
 
@@ -30,7 +30,7 @@ QuinCE API ──► Download dataset (zip)
               Write SOCAT header to .tsv
                      │
                      ▼
-              Repack ──► output zip (SOCAT-ready)
+         Move .tsv + .xml ──► output folder (SOCAT-ready)
                      │
                      ▼
               Clean up temporary files
@@ -41,7 +41,7 @@ QuinCE API ──► Download dataset (zip)
 - Python 3.x
 - [`icoscp_core`](https://pypi.org/project/icoscp-core/) – ICOS Carbon Portal client
 - [`requests`](https://pypi.org/project/requests/) – HTTP library for the QuinCE API
-- `os`, `sys`, `json`, `zipfile`, `glob`, `subprocess`, `xml.etree.ElementTree`, `datetime` – Python standard library (included with Python)
+- `os`, `sys`, `json`, `zipfile`, `tempfile`, `shutil`, `xml.etree.ElementTree`, `datetime` – Python standard library (included with Python)
 
 Install third-party dependencies:
 
@@ -103,8 +103,8 @@ python prep_SOCAT.py -n <dataset_name> -S <template_name> [options]
 
 | Flag | Default | Description |
 |---|---|---|
-| `-t`, `--tmp` | `/tmp/` | Temporary working directory |
-| `-o`, `--output` | Current directory | Output folder for the final zip |
+| `-t`, `--tmp` | System temp folder | Temporary working directory |
+| `-o`, `--output` | Dataset name | Output folder for the final `.tsv` and `.xml` files |
 | `-d`, `--data` | `Data/` | Folder containing `credentials.json` and the XML template |
 | `-v`, `--version` | — | Print version and exit |
 
@@ -119,7 +119,7 @@ This will:
 2. Read `Data/1199_template.xml` and fill in the `TK` fields
 3. Query the Carbon Portal for the corresponding PID/URI
 4. Prepend the SOCAT header to the TSV file
-5. Write `output/119920230901.zip` ready for SOCAT upload
+5. Write `output/119920230901.tsv` and `output/119920230901.xml` ready for SOCAT upload
 
 ## Exit codes
 
@@ -134,7 +134,12 @@ This will:
 
 ## Version
 
-Current version: **1.0**
+Current version: **1.1**
+
+### Changelog
+
+- **1.1** – Output the SOCAT-ready `.tsv` and `.xml` files directly to the output folder instead of repacking into a zip archive. Added Windows compatibility (system-independent temp folder and path handling). Various bug fixes.
+- **1.0** – Initial release.
 
 ## Author
 
