@@ -201,11 +201,21 @@ def populate_xml(xml_data, metadata):
         child = populate_xml(child, metadata)
     return xml_data
 
+# Get the default namespace from the imported XML
+def get_namespace_uri(el):
+    # ChatGPT gave me this. I hope it works - Steve
+    if el.tag.startswith("{"):
+        return el.tag.split("}", 1)[0][1:]
+    return None
 
 # Save the completed xml file into the temporary folder
 #
 def save_xml(xml_data, tmp_folder):
     fname = os.path.join(tmp_folder, os.path.basename(tmp_folder) + '.xml')
+    
+    # We want to use the default (empty) namespace on export
+    ET.register_namespace("", get_namespace_uri(xml_data))
+    
     xml_str = ET.tostring(xml_data).decode()
     try:
         with open(fname, 'w') as xml_file:
@@ -255,6 +265,7 @@ def write_header(tsv_file, xml_data):
 
 # Check if the folder exists and create it if not
 #
+<<<<<<< HEAD
 def make_folder(folder):
     if (folder != '') & (folder != '.'):
         if not os.path.isdir(folder):
@@ -265,6 +276,38 @@ def make_folder(folder):
                 sys.exit(3)
                 
 # Move the SOCAT tsv and xml files to the output folder.
+=======
+def repack_preclean(tmp_folder):
+    try:
+        # Standardize paths to prevent slash mismatches
+        tmp_folder = os.path.normpath(tmp_folder)
+            
+        # 1. Clean up top-level items
+        flist = glob.glob(os.path.join(tmp_folder, '*'))
+        for f in flist:
+            # Match safely regardless of folder slash directions
+            if ('.zip' in f) | ('/raw' in f):
+                if os.path.isdir(f):
+                    shutil.rmtree(f) 
+                elif os.path.isfile(f):
+                     os.remove(f)     
+
+        # 2. Clean up dataset subfolder items
+        dataset_folder = os.path.join(tmp_folder, 'dataset')
+        flist = glob.glob(os.path.join(dataset_folder, '*'))
+        for f in flist:
+            if 'SOCAT' not in os.path.basename(f):
+                if os.path.isdir(f):
+                    shutil.rmtree(f)
+                elif os.path.isfile(f):
+                    os.remove(f)
+
+    except OSError as e:
+        print('Error: could not prepare the dataset for repacking: ', e)
+        sys.exit(5)
+
+# Recompress the data into a zip ready for upload.
+>>>>>>> origin/master
 #
 def move_to_output(tsv_file, xml_file, out_folder):
     # Ensure the output folder exists before moving files into it
